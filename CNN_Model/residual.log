@@ -1,0 +1,2 @@
+Mon, 18 Jul 2016 11:11:40 cmodule.py[line:1831] WARNING OPTIMIZATION WARNING: your Theano flag `cxx` seems not to be the g++ compiler. So we disable the compiler optimization specific to g++ that tell to compile for a specific CPU. At worst, this could cause slow down.
+         You can add those parameters to the compiler yourself via the Theano flag `gcc.cxxflags`.
