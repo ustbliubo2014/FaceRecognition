@@ -1,0 +1,537 @@
+# encoding: utf-8
+
+"""
+@author: liubo-it
+@software: PyCharm Community Edition
+@file: load_data.py
+@time: 2016/7/4 15:19
+@contact: ustb_liubo@qq.com
+@annotation: load_data : 负责读入不同尺寸,不同维度的数据; 包含数据的预处理(旋转图像,切分图像[分割patch])
+[最后每个函数都是通过函数名+args调用]
+MyThread(func=writer, args=valid_write_args, name='valid_write')
+"""
+
+import sys
+reload(sys)
+sys.setdefaultencoding("utf-8")
+import traceback
+from scipy.misc import imread, imresize, imsave
+import numpy as np
+from keras.utils import np_utils
+from PIL import Image
+import os
+from skimage.transform import rotate
+from random import randint
+import pdb
+import msgpack_numpy
+import shutil
+
+def rotate_img(img, angle):
+    # 旋转图片
+    return rotate(img, randint(-angle, angle))
+
+
+def flip_lr(img):
+    # 水平翻转图片
+    if randint(0, 1):
+        return np.fliplr(img)
+    else:
+        return img
+
+
+def flip_ud(img):
+    # 垂直翻转图片
+    return np.flipud(img)
+
+
+def read_one_rgb_pic(pic_path, pic_shape, func_args_dic):
+    '''
+    :param pic_path: 文件路径
+    :param pic_shape: 最后图片的shape
+    :param func_dic: 对该图片的处理 {func:args(该函数的参数[旋转图片时需要旋转角度])} [一张图片可能需要多个]
+    :return:
+    '''
+    # 读入一张rgb图片
+    if len(func_args_dic) == 0:
+        return imresize(imread(pic_path), pic_shape)
+    img = imread(pic_path)
+    # 先读入图片,在做各种处理,最后修改尺寸
+    print func_args_dic
+    for func in func_args_dic:
+        args = [img]
+        args.extend(func_args_dic.get(func))
+        img = func(*args)
+    return imresize(img, pic_shape)
+
+
+def read_one_gray_pic(pic_path, pic_shape, func_args_dic):
+    '''
+    :param pic_path: 文件路径
+    :param pic_shape: 最后图片的shape
+    :param func_dic: 对该图片的处理 {func:args(该函数的参数[旋转图片时需要旋转角度])} [一张图片可能需要多个]
+    :return:
+    '''
+    # 读入一张rgb图片
+    if len(func_args_dic) == 0:
+        return imresize(np.array(Image.open(pic_path).convert('L')), pic_shape)
+    img = np.array(Image.open(pic_path).convert('L'))
+    # 先读入图片,在做各种处理,最后修改尺寸
+    print func_args_dic
+    for func in func_args_dic:
+        args = [img]
+        args.extend(func_args_dic.get(func))
+        img = func(*args)
+    return imresize(img, pic_shape)
+
+
+
+def load_rgb_batch_data(batch_sample_list, person_num, pic_shape, func_args_dic):
+    '''
+        :param sample_list: [(path_1,label_1),...,(path_n, label_n)]
+        :param person_num: label维度,用于生成数据
+        :param pic_shape:
+        :param 对图片的操作(取某一部分/旋转/平移)
+        :return: 每次读入部分数据到队列中, 边训练边读入
+    '''
+    X = []
+    Y = []
+    for sample_path,person_id in batch_sample_list:
+        try:
+            X.append(read_one_rgb_pic(sample_path, pic_shape, func_args_dic))
+            Y.append(person_id)
+        except:
+            traceback.print_exc()
+            continue
+    X = np.asarray(X, dtype=np.float32) / 255.0
+    X = np.transpose(X,(0,3,1,2))
+    Y = np_utils.to_categorical(np.asarray(Y, dtype=np.int), person_num)
+    return X, Y
+
+
+def load_gray_batch_data(batch_sample_list, person_num, pic_shape, func_args_dic):
+    '''
+        :param sample_list: [(path_1,label_1),...,(path_n, label_n)]
+        :param person_num: label维度,用于生成数据
+        :param pic_shape:
+        :param 对图片的操作(取某一部分/旋转/平移)
+        :return: 每次读入部分数据到队列中, 边训练边读入
+    '''
+    X = []
+    Y = []
+    for sample_path, person_id in batch_sample_list:
+        X.append(read_one_gray_pic(sample_path, pic_shape, func_args_dic))
+        Y.append(person_id)
+    X = np.asarray(X, dtype=np.float32) / 255.0
+    X = np.reshape(X, (X.shape[0], 1, X.shape[1], X.shape[2]))
+    Y = np_utils.to_categorical(np.asarray(Y, dtype=np.int), person_num)
+    return X, Y
+
+
+def load_rgb_multi_person_all_data(all_person_folder, pic_shape, label_int, person_num_threshold,pic_num_threshold,
+                                   filter_list, func_args_dic):
+    '''
+        :param all_person_folder: 多个文件夹,每个文件夹是一个人
+        :param pic_shape:
+        :param label_int: True则返回的label是float, False返回label是string
+        :param person_num_threshold:需要读入多少人的图片(可以读入少量人的图片进行测试)
+        :param pic_num_threshold: 每个人读取多少张图片(每个人读入少量图片进行测试)
+        :param filter_list: 包含哪些字段不用读入['unknown', 'Must_Same', 'Maybe_same']
+        :param 对图片的操作(取某一部分/旋转/平移)
+        :return:
+    '''
+    person_list = os.listdir(all_person_folder)
+    if person_num_threshold != None:
+        person_num_threshold = min(person_num_threshold, len(person_list))
+    data = []
+    label = []
+    all_pic_list = []
+    for person_index, person in enumerate(person_list[:person_num_threshold]):
+        if person_index % 10 == 0:
+            print person_index
+        if len(filter_list) > 0:
+            has_filter = False
+            for filter in filter_list:
+                if person in filter:
+                    has_filter = True
+                    break
+            if has_filter:
+                continue
+        person_path = os.path.join(all_person_folder, person)
+        if not os.path.isdir(person_path):
+            print 'error dir :', person_path
+            continue
+        pic_list = os.listdir(person_path)
+        if pic_num_threshold != None:
+            this_pic_num_threshold = min(len(pic_list), pic_num_threshold)
+        else:
+            this_pic_num_threshold = len(pic_list)
+        pic_list = pic_list[:this_pic_num_threshold]
+        all_pic_list.extend(pic_list)
+        for pic in pic_list:
+            pic_path = os.path.join(person_path, pic)
+            try:
+                data.append(read_one_rgb_pic(pic_path, pic_shape, func_args_dic))
+                if label_int:
+                    label.append(person_index)
+                else:
+                    label.append(person)
+            except:
+                traceback.print_exc()
+                continue
+    data = np.asarray(data, dtype=np.float32)
+    data = data / 255.0
+    data = np.transpose(data,(0,3,1,2))
+    label = np.asarray(label)
+    return data, label, all_pic_list
+
+
+def load_gray_multi_person_all_data(all_person_folder, pic_shape, label_int, person_num_threshold,pic_num_threshold,
+                                    filter_list, func_args_dic):
+    '''
+        :param all_person_folder: 多个文件夹,每个文件夹是一个人
+        :param pic_shape:
+        :param label_int: True则返回的label是float, False返回label是string
+        :param person_num_threshold:需要读入多少人的图片(可以读入少量人的图片进行测试)
+        :param pic_num_threshold: 每个人读取多少张图片(每个人读入少量图片进行测试)
+        :param filter_list: 包含哪些字段不用读入['unknown', 'Must_Same', 'Maybe_same']
+        :param 对图片的操作(取某一部分/旋转/平移)
+        :return:
+    '''
+    person_list = os.listdir(all_person_folder)
+    if person_num_threshold != None:
+        person_num_threshold = min(person_num_threshold, len(person_list))
+    data = []
+    label = []
+    all_pic_list = []
+    for person_index, person in enumerate(person_list[:person_num_threshold]):
+        if len(filter_list) > 0:
+            has_filter = False
+            for filter in filter_list:
+                if person in filter:
+                    has_filter = True
+                    break
+            if has_filter:
+                continue
+        person_path = os.path.join(all_person_folder, person)
+        if not os.path.isdir(person_path):
+            continue
+
+        pic_list = os.listdir(person_path)
+        if pic_num_threshold != None:
+            pic_num_threshold = min(len(pic_list), pic_num_threshold)
+        else:
+            pic_num_threshold = len(pic_list)
+        pic_list = pic_list[:pic_num_threshold]
+        all_pic_list.extend(pic_list)
+        for pic in pic_list:
+            pic_path = os.path.join(person_path, pic)
+            try:
+                data.append(read_one_gray_pic(pic_path, pic_shape, func_args_dic))
+                if label_int:
+                    label.append(person_index)
+                else:
+                    label.append(person)
+            except:
+                traceback.print_exc()
+                continue
+    data = np.asarray(data, dtype=np.float32)
+    data = data / 255.0
+    data = np.reshape(data, (data.shape[0], 1, data.shape[1], data.shape[2]))
+    label = np.asarray(label)
+    return data, label, all_pic_list
+
+
+
+def load_rgb_unknown_person_all_data(person_path, pic_shape, pic_num_threshold, func_args_dic):
+    '''
+        :param all_person_folder: 多个文件夹,每个文件夹是一个人
+        :param pic_shape:
+        :param pic_num_threshold: 需要读入多少图片
+        :param 对图片的操作(取某一部分/旋转/平移)
+        :return:
+    '''
+    data = []
+    all_pic_list = []
+    pic_list = os.listdir(person_path)
+    if pic_num_threshold != None:
+        pic_num_threshold = min(len(pic_list), pic_num_threshold)
+    else:
+        pic_num_threshold = len(pic_list)
+    pic_list = pic_list[:pic_num_threshold]
+    all_pic_list.extend(pic_list)
+    for pic in pic_list:
+        pic_path = os.path.join(person_path, pic)
+        try:
+            data.append(read_one_rgb_pic(pic_path, pic_shape, func_args_dic))
+        except:
+            traceback.print_exc()
+            continue
+    data = np.asarray(data, dtype=np.float32)
+    data = data / 255.0
+    data = np.transpose(data,(0,3,1,2))
+    return data
+
+
+def load_gray_unknown_person_all_data(person_path, pic_shape, pic_num_threshold, func_args_dic):
+    '''
+        :param all_person_folder: 多个文件夹,每个文件夹是一个人
+        :param pic_shape:
+        :param pic_num_threshold: 需要读入多少图片
+        :param 对图片的操作(取某一部分/旋转/平移)
+        :return:
+    '''
+    data = []
+    all_pic_list = []
+    pic_list = os.listdir(person_path)
+    if pic_num_threshold != None:
+        pic_num_threshold = min(len(pic_list), pic_num_threshold)
+    else:
+        pic_num_threshold = len(pic_list)
+    pic_list = pic_list[:pic_num_threshold]
+    all_pic_list.extend(pic_list)
+    for pic in pic_list:
+        pic_path = os.path.join(person_path, pic)
+        try:
+            data.append(read_one_gray_pic(pic_path, pic_shape, func_args_dic))
+        except:
+            traceback.print_exc()
+            continue
+    data = np.asarray(data, dtype=np.float32)
+    data = data / 255.0
+    data = np.reshape(data, (data.shape[0], 1, data.shape[1], data.shape[2]))
+    return data
+
+
+def load_two_deep_path(folder):
+    '''
+        读入两级目录的文件列表 : 每个人最多取50张图片
+        annotate
+            liubo
+                person_1
+                person_2
+            ligang
+                person_3
+                person_4
+        :param folder: 文件名
+        :return: {person:[pic_path1,pic_path2]}
+    '''
+    folder_list = os.listdir(folder)
+    person_path_dic = {}
+
+    for child_folder in folder_list:
+        child_folder_path = os.path.join(folder, child_folder)
+        person_list = os.listdir(child_folder_path)
+        for person in person_list:
+            person_path = os.path.join(child_folder_path, person)
+            path_list = map(lambda x:os.path.join(person_path, x), os.listdir(person_path))
+            person_path_dic[person] = path_list
+    return person_path_dic
+
+
+def load_one_deep_path(folder):
+    '''
+        读入两级目录的文件列表 : 每个人最多取50张图片
+        vgg_all
+            person_1
+            person_2
+            person_3
+            person_4
+        :param folder: 文件名
+        :return: {person:[pic_path1,pic_path2]}
+    '''
+    person_list = os.listdir(folder)
+    person_path_dic = {}
+    for person in person_list:
+        person_path = os.path.join(folder, person)
+        path_list = map(lambda x:os.path.join(person_path, x), os.listdir(person_path))
+        person_path_dic[person] = path_list
+    return person_path_dic
+
+
+def split_data(data, label, split_rate=0.9):
+    np.random.seed(1337)
+    shuffle_list = range(data.shape[0])
+    np.random.shuffle(shuffle_list)
+    train_num = int(data.shape[0] * split_rate)
+    train_data = data[shuffle_list[:train_num]]
+    train_label = label[shuffle_list[:train_num]]
+    valid_data = data[shuffle_list[train_num:]]
+    valid_label = label[shuffle_list[train_num:]]
+    return train_data, train_label, valid_data, valid_label
+
+
+def load_pair_data(person_path_dic, pre_person_num=10):
+    '''
+        将数据以pair的形式读入
+        :param person_path_dic: 人名, path 列表
+        :param pre_person_num: 每个人的正样本数(正负样本数相同)
+        :return:
+    '''
+    person_list = person_path_dic.keys()
+    person_num = len(person_list) - 1
+    has_add_pair_dic = {}
+    for person in person_path_dic:
+        pic_path_list = person_path_dic.get(person)
+        # 得到正样本
+        if len(pic_path_list) < 10:
+            continue
+        length = len(pic_path_list) - 1
+        count = 0
+        while count < pre_person_num:
+            first = randint(0, length)
+            second = randint(0, length)
+            if first == second:
+                continue
+            if first > second:
+                first, second = second, first
+            pair = pic_path_list[first] + '\t' + pic_path_list[second]
+            if pair in has_add_pair_dic:
+                continue
+            else:
+                has_add_pair_dic[pair] = 0
+                count += 1
+        # 得到负样本
+        count = 0
+        while count < pre_person_num:
+            other_person = person_list[randint(0, person_num)]
+            if other_person == person:
+                continue
+            pair = pic_path_list[randint(0, length)] + '\t' + person_path_dic.get(other_person)[0]
+            if pair in has_add_pair_dic:
+                continue
+            else:
+                has_add_pair_dic[pair] = 1
+                count += 1
+    return has_add_pair_dic
+
+
+def load_orl():
+    folder = '/data/liubo/face/face_DB/ORL/model_data'
+    pic_list = os.listdir(folder)
+    path_list = []
+    label_list = []
+    for pic in pic_list:
+        pic_path = os.path.join(folder, pic)
+        label = int(pic.split('_')[1]) - 1
+        path_list.append(pic_path)
+        label_list.append(label)
+    return path_list, label_list
+
+
+def load_verif_originalimages():
+    folder = '/data/liubo/face/originalimages/originalimages_verif'
+    pic_list = os.listdir(folder)
+    path_list = []
+    label_list = []
+    for pic in pic_list:
+        pic_path = os.path.join(folder, pic)
+        label = int(pic.split('-')[0]) - 1
+        path_list.append(pic_path)
+        label_list.append(label)
+    return path_list, label_list
+
+
+def create_orl_pair_file():
+    # 每个图片选所有正样本,选同样数量的负样本
+    folder = '/data/liubo/face/face_DB/ORL/verif_data'
+    pair_file = '/data/liubo/face/face_DB/ORL/verif_pair.txt'
+    same_person_id = 0
+    no_same_person_id = 1
+    person_path_dic = {}
+    pic_list = os.listdir(folder)
+    for pic in pic_list:
+        pic_path = os.path.join(folder, pic)
+        label = int(pic.split('_')[1]) - 1
+        path_list = person_path_dic.get(label, [])
+        path_list.append(pic_path)
+        person_path_dic[label] = path_list
+    person_list = person_path_dic.keys()
+
+    pair_list = []
+    person_num = len(person_path_dic)
+    for person in person_path_dic:
+        try:
+            this_person_path_list = person_path_dic.get(person)
+            path_num = len(this_person_path_list)
+            count = 0
+            sample_num = path_num * (path_num - 1) / 2
+
+            while count < sample_num:
+                other_person = person_list[randint(0, person_num-1)]
+                if other_person == person:
+                    continue
+                other_person_path = person_path_dic.get(other_person)
+                if len(other_person_path) < 1 or len(this_person_path_list) < 1:
+                    continue
+                count += 1
+                pair_list.append((
+                    this_person_path_list[randint(0, path_num-1)],
+                    other_person_path[randint(0, len(other_person_path)-1)],
+                    no_same_person_id
+                ))
+            has_find = {}
+            for index_i in range(0, path_num):
+                for index_j in range(index_i+1, path_num):
+                    pair_list.append((
+                        this_person_path_list[index_i],
+                        this_person_path_list[index_j],
+                        same_person_id
+                    ))
+
+                # count = 0
+                # while count < 2:
+                #     index_j = randint(0, path_num-1)
+                #     if index_j != index_i and (index_j, index_i) not in has_find and (index_i, index_j) not in has_find:
+                #         pair_list.append((
+                #             this_person_path_list[index_i],
+                #             this_person_path_list[index_j],
+                #             same_person_id
+                #         ))
+                #         count += 1
+                #         has_find[(index_j, index_i)] = 1
+                #         has_find[(index_i, index_j)] = 1
+        except:
+            traceback.print_exc()
+            pdb.set_trace()
+    f = open(pair_file, 'w')
+    for element in pair_list:
+        f.write('\t'.join(map(str, element))+'\n')
+    f.close()
+
+
+def orl_data_move():
+    train_folder = '/data/liubo/face/face_DB/ORL/train'
+    test_folder = '/data/liubo/face/face_DB/ORL/test'
+    model_folder = '/data/liubo/face/face_DB/ORL/model_data'
+    verif_folder = '/data/liubo/face/face_DB/ORL/verif_data'
+    train_pic_list = os.listdir(train_folder)
+    test_pic_list = os.listdir(test_folder)
+    for pic in train_pic_list:
+        label = int(pic.split('_')[1])
+        if label < 32:
+            shutil.copyfile(os.path.join(train_folder, pic), os.path.join(model_folder, pic))
+        else:
+            shutil.copyfile(os.path.join(train_folder, pic), os.path.join(verif_folder, pic))
+    for pic in test_pic_list:
+        label = int(pic.split('_')[1])
+        if label < 32:
+            shutil.copyfile(os.path.join(test_folder, pic), os.path.join(model_folder, pic))
+        else:
+            shutil.copyfile(os.path.join(test_folder, pic), os.path.join(verif_folder, pic))
+
+
+def person_path_dic_trans(person_path_dic):
+    sample_list = []
+    person_index = 0
+    for person in person_path_dic:
+        sample_list.extend(map(lambda x:(x, person_index), person_path_dic.get(person)))
+        person_index += 1
+    np.random.shuffle(sample_list)
+    return sample_list, person_index+1
+
+
+if __name__ == '__main__':
+    person_path_dic = load_one_deep_path('/data/hanlin')
+    sample_list, person_num = person_path_dic_trans(person_path_dic)
+    pdb.set_trace()
+    # pass
