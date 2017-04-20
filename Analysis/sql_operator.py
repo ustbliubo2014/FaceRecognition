@@ -6,7 +6,7 @@
 @file: sql_operator.py
 @time: 2016/11/16 19:24
 @contact: ustb_liubo@qq.com
-@annotation: sql_operator
+@annotation: sql_operator : mysql相关操作
 """
 import sys
 import logging
