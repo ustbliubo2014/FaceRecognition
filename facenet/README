@@ -1,0 +1,2 @@
+facenet的网络结构, softmax+center_loss的损失函数
+训练数据是MS, 经过网友标注的正确数据
