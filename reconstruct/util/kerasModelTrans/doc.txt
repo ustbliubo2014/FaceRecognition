@@ -1,2 +1,0 @@
-转换不同尺寸的keras的模型(前面的cnn weight可能不用变,直接训练后面的分类模型,
-    也可能是训练好后面的分类后需要微调前面的cnn weight + full connection)
