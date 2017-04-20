@@ -1,0 +1,1 @@
+利用skimage完成图片的扩充(用tensorflow时最好使用tf自带的数据扩充函数)
