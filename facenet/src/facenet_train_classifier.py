@@ -3,10 +3,10 @@
 """
 @author: liubo
 @software: PyCharm
-@file: facenet_train_classifier_baihe.py
+@file: facenet_train_classifier.py
 @time: 2017/1/6 12:18
 @contact: ustb_liubo@qq.com
-@annotation: facenet_train_classifier_baihe
+@annotation: facenet_train_classifier
 """
 from datetime import datetime
 import os.path
@@ -19,9 +19,10 @@ import argparse
 import facenet
 import lfw
 import tensorflow.contrib.slim as slim
-import pdb
+# import pdb
 import msgpack_numpy
 import traceback
+
 
 def main(args):
 
@@ -29,6 +30,7 @@ def main(args):
 
     subdir = datetime.strftime(datetime.now(), '%Y%m%d-%H%M%S')
     log_dir = os.path.join(os.path.expanduser(args.logs_base_dir), subdir)
+    # 创建模型文件夹
     if not os.path.isdir(log_dir):  # Create the log directory if it doesn't exist
         os.makedirs(log_dir)
     model_dir = os.path.join(os.path.expanduser(args.models_base_dir), subdir)
@@ -36,7 +38,7 @@ def main(args):
         os.makedirs(model_dir)
 
     # Store some git revision info in a text file in the log directory
-    src_path,_ = os.path.split(os.path.realpath(__file__))
+    src_path, _ = os.path.split(os.path.realpath(__file__))
     facenet.store_revision_info(src_path, log_dir, ' '.join(sys.argv))
 
     np.random.seed(seed=args.seed)
@@ -60,9 +62,9 @@ def main(args):
         print('load baihe dataset')
         lfw_paths, actual_issame = msgpack_numpy.load(open(args.baihe_pack_file))
 
-
     with tf.Graph().as_default():
         tf.set_random_seed(args.seed)
+        # 迭代轮数, 不同的轮数可以使用不同的学习率
         global_step = tf.Variable(0, trainable=False)
 
         # Get a list of image paths and their labels
@@ -241,7 +243,7 @@ def evaluate(sess, embeddings, labels, actual_issame, batch_size,
     lfw_time = time.time() - start_time
     # Add validation loss and accuracy to summary
     summary = tf.Summary()
-    #pylint: disable=maybe-no-member
+    # pylint: disable=maybe-no-member
     summary.value.add(tag='lfw/accuracy', simple_value=np.mean(accuracy))
     summary.value.add(tag='lfw/val_rate', simple_value=val)
     summary.value.add(tag='time/lfw', simple_value=lfw_time)

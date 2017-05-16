@@ -318,7 +318,7 @@ def get_dataset(paths):
             facedir = os.path.join(path_exp, class_name)
             if os.path.isdir(facedir):
                 images = os.listdir(facedir)
-                image_paths = [os.path.join(facedir,img) for img in images]
+                image_paths = [os.path.join(facedir, img) for img in images]
                 dataset.append(ImageClass(class_name, image_paths))
   
     return dataset
@@ -474,7 +474,7 @@ def store_revision_info(src_path, output_dir, arg_string):
     git_hash = stdout.strip()
   
     # Get local changes
-    gitproc = Popen(['git', 'diff', 'HEAD'], stdout = PIPE, cwd=src_path)
+    gitproc = Popen(['git', 'diff', 'HEAD'], stdout=PIPE, cwd=src_path)
     (stdout, _) = gitproc.communicate()
     git_diff = stdout.strip()
     
