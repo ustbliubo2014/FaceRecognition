@@ -71,7 +71,7 @@ def main(args):
         image_list, label_list = facenet.get_image_paths_and_labels(train_set)
 
         # Read data and apply label preserving distortions
-        image_batch, label_batch = facenet.read_and_augument_data(image_list, label_list, args.image_size,
+        image_batch, label_batch = facenet.read_and_augment_data(image_list, label_list, args.image_size,
             args.batch_size, args.max_nrof_epochs, args.random_crop, args.random_flip, args.random_rotate,
             args.nrof_preprocess_threads)
         print('Total number of classes: %d' % nrof_classes)
@@ -130,7 +130,7 @@ def main(args):
         lfw_label_list = range(0, len(lfw_paths))
         assert (len(lfw_paths) % args.lfw_batch_size == 0), \
             "The number of images in the LFW test set need to be divisible by the lfw_batch_size"
-        eval_image_batch, eval_label_batch = facenet.read_and_augument_data(lfw_paths, lfw_label_list, args.image_size,
+        eval_image_batch, eval_label_batch = facenet.read_and_augment_data(lfw_paths, lfw_label_list, args.image_size,
                                                                             args.lfw_batch_size, None, False, False,
                                                                             False, args.nrof_preprocess_threads,
                                                                             shuffle=False)
