@@ -82,58 +82,63 @@ def main(args):
         # Placeholder for the learning rate
         learning_rate_placeholder = tf.placeholder(tf.float32, name='learning_rate')
 
-        # Build the inference graph
-        prelogits, _ = network.inference(image_batch, args.keep_probability,
-            phase_train=True, weight_decay=args.weight_decay)
+        # Build the inference graph, 返回的是网络结构
+        prelogits, _ = network.inference(image_batch, args.keep_probability, phase_train=True,
+                                         weight_decay=args.weight_decay)
         # 初始化采用截断的正态分布噪声, 标准差为0.1
         # tf.truncated_normal_initializer(stddev=0.1)
         logits = slim.fully_connected(prelogits, len(train_set), activation_fn=None,
-                weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
-                weights_regularizer=slim.l2_regularizer(args.weight_decay),
-                scope='Logits', reuse=False)
+                                      weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
+                                      weights_regularizer=slim.l2_regularizer(args.weight_decay),
+                                      scope='Logits', reuse=False)
 
         # Add DeCov regularization loss
-        if args.decov_loss_factor>0.0:
+        if args.decov_loss_factor > 0.0:
             logits_decov_loss = facenet.decov_loss(logits) * args.decov_loss_factor
+            # 将decov_loss加入到名字为tf.GraphKeys.REGULARIZATION_LOSSES的集合当中来
             tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, logits_decov_loss)
 
-        # Add center loss
-        if args.center_loss_factor>0.0:
+        # Add center loss (center_loss作为一个正则项加入到collections)
+        if args.center_loss_factor > 0.0:
             prelogits_center_loss, _ = facenet.center_loss(prelogits, label_batch, args.center_loss_alfa, nrof_classes)
+            # 将center加入到名字为tf.GraphKeys.REGULARIZATION_LOSSES的集合当中来
             tf.add_to_collection(tf.GraphKeys.REGULARIZATION_LOSSES, prelogits_center_loss * args.center_loss_factor)
 
+        # 对学习率进行指数衰退
         learning_rate = tf.train.exponential_decay(learning_rate_placeholder, global_step,
             args.learning_rate_decay_epochs*args.epoch_size, args.learning_rate_decay_factor, staircase=True)
         tf.scalar_summary('learning_rate', learning_rate)
 
         # Calculate the average cross entropy loss across the batch
+        # 将softmax和交叉熵一起做,得到最后的损失函数,提高效率
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits, label_batch, name='cross_entropy_per_example')
         cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
         tf.add_to_collection('losses', cross_entropy_mean)
 
         # Calculate the total losses
+        # 获取正则loss
         regularization_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         total_loss = tf.add_n([cross_entropy_mean] + regularization_losses, name='total_loss')
 
         # Build a Graph that trains the model with one batch of examples and updates the model parameters
         train_op = facenet.train(total_loss, global_step, args.optimizer,
-            learning_rate, args.moving_average_decay, tf.all_variables(), args.log_histograms)
-        # train_op = facenet.train(total_loss, global_step, args.optimizer,
-        #     learning_rate, args.moving_average_decay, tf.global_variables(), args.log_histograms)
-
+                                 learning_rate, args.moving_average_decay, tf.all_variables(), args.log_histograms)
 
         # Evaluation
         print('Building evaluation graph')
-        lfw_label_list = range(0,len(lfw_paths))
-        assert (len(lfw_paths) % args.lfw_batch_size == 0), "The number of images in the LFW test set need to be divisible by the lfw_batch_size"
+        lfw_label_list = range(0, len(lfw_paths))
+        assert (len(lfw_paths) % args.lfw_batch_size == 0), \
+            "The number of images in the LFW test set need to be divisible by the lfw_batch_size"
         eval_image_batch, eval_label_batch = facenet.read_and_augument_data(lfw_paths, lfw_label_list, args.image_size,
-            args.lfw_batch_size, None, False, False, False, args.nrof_preprocess_threads, shuffle=False)
+                                                                            args.lfw_batch_size, None, False, False,
+                                                                            False, args.nrof_preprocess_threads,
+                                                                            shuffle=False)
         # Node for input images
         eval_image_batch.set_shape((None, args.image_size, args.image_size, 3))
         eval_image_batch = tf.identity(eval_image_batch, name='input')
         eval_prelogits, _ = network.inference(eval_image_batch, 1.0,
-            phase_train=False, weight_decay=0.0, reuse=True)
+                                              phase_train=False, weight_decay=0.0, reuse=True)
         eval_embeddings = tf.nn.l2_normalize(eval_prelogits, 1, 1e-10, name='embeddings')
 
         # Create a saver
@@ -153,6 +158,10 @@ def main(args):
         summary_writer = tf.train.SummaryWriter(log_dir, sess.graph)
         tf.train.start_queue_runners(sess=sess)
 
+        # 将队列runner启动，队列就开始运行，返回启动的线程
+        # 注意input_queue是先入列，再出列，由于入列的时候输入是place holder，因此到后的线程的时候，会阻塞，
+        # 直到下train中sess run （enqueue_op）的时候，  会向队列中载入值，后面的出列才有对象，才在各自的队列中开始执行
+
         with sess.as_default():
 
             if pretrained_model:
@@ -167,8 +176,8 @@ def main(args):
                     step = sess.run(global_step, feed_dict=None)
                     epoch = step // args.epoch_size
                     # Train for one epoch
-                    train(args, sess, epoch, learning_rate_placeholder, global_step,
-                        total_loss, train_op, summary_op, summary_writer, regularization_losses, args.learning_rate_schedule_file)
+                    train(args, sess, epoch, learning_rate_placeholder, global_step, total_loss, train_op, summary_op,
+                          summary_writer, regularization_losses, args.learning_rate_schedule_file)
 
                     # Save variables and the metagraph if it doesn't exist already
                     save_variables_and_metagraph(sess, saver, summary_writer, model_dir, subdir, step)
@@ -176,7 +185,7 @@ def main(args):
                     # Evaluate on LFW
                     if args.lfw_dir:
                         evaluate(sess, eval_embeddings, eval_label_batch, actual_issame, args.lfw_batch_size, args.seed,
-                            args.lfw_nrof_folds, log_dir, step, summary_writer)
+                                 args.lfw_nrof_folds, log_dir, step, summary_writer)
                     # Evaluate on baihe_data
                     if args.baihe_pack_file:
                         evaluate(sess, eval_embeddings, eval_label_batch, actual_issame, args.lfw_batch_size, args.seed,
@@ -187,11 +196,11 @@ def main(args):
     return model_dir
 
 
-def train(args, sess, epoch, learning_rate_placeholder, global_step,
-      loss, train_op, summary_op, summary_writer, regularization_losses, learning_rate_schedule_file):
+def train(args, sess, epoch, learning_rate_placeholder, global_step, loss, train_op, summary_op, summary_writer,
+          regularization_losses, learning_rate_schedule_file):
     batch_number = 0
 
-    if args.learning_rate>0.0:
+    if args.learning_rate > 0.0:
         lr = args.learning_rate
     else:
         lr = facenet.get_learning_rate_from_file(learning_rate_schedule_file, epoch)
@@ -253,7 +262,7 @@ def evaluate(sess, embeddings, labels, actual_issame, batch_size,
 
 
 def save_variables_and_metagraph(sess, saver, summary_writer, model_dir, model_name, step):
-    # Save the model checkpoint
+    # Save the model checkpoint meta_graph
     print('Saving variables')
     start_time = time.time()
     checkpoint_path = os.path.join(model_dir, 'model-%s.ckpt' % model_name)
@@ -269,7 +278,7 @@ def save_variables_and_metagraph(sess, saver, summary_writer, model_dir, model_n
         save_time_metagraph = time.time() - start_time
         print('Metagraph saved in %.2f seconds' % save_time_metagraph)
     summary = tf.Summary()
-    #pylint: disable=maybe-no-member
+    # pylint: disable=maybe-no-member
     summary.value.add(tag='time/save_variables', simple_value=save_time_variables)
     summary.value.add(tag='time/save_metagraph', simple_value=save_time_metagraph)
     summary_writer.add_summary(summary, step)

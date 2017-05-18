@@ -27,6 +27,7 @@ import tensorflow.contrib.slim as slim
 
 from tensorflow.python.ops import data_flow_ops
 
+
 def main(args):
   
     network = importlib.import_module(args.model_def, 'inference')
@@ -40,7 +41,7 @@ def main(args):
         os.makedirs(model_dir)
 
     # Store some git revision info in a text file in the log directory
-    src_path,_ = os.path.split(os.path.realpath(__file__))
+    src_path, _ = os.path.split(os.path.realpath(__file__))
     facenet.store_revision_info(src_path, log_dir, ' '.join(sys.argv))
 
     np.random.seed(seed=args.seed)
@@ -57,8 +58,7 @@ def main(args):
         pairs = lfw.read_pairs(os.path.expanduser(args.lfw_pairs))
         # Get the paths for the corresponding images
         lfw_paths, actual_issame = lfw.get_paths(os.path.expanduser(args.lfw_dir), pairs, args.lfw_file_ext)
-        
-    
+
     with tf.Graph().as_default():
         tf.set_random_seed(args.seed)
         global_step = tf.Variable(0, trainable=False)
@@ -72,11 +72,10 @@ def main(args):
         
         image_paths_placeholder = tf.placeholder(tf.string, shape=(None,3), name='image_paths')
         labels_placeholder = tf.placeholder(tf.int64, shape=(None,3), name='labels')
-        
-        input_queue = data_flow_ops.FIFOQueue(capacity=100000,
-                                    dtypes=[tf.string, tf.int64],
-                                    shapes=[(3,), (3,)],
-                                    shared_name=None, name=None)
+
+        # 新建一个队列,数据流操作,fifo,先入先出
+        input_queue = data_flow_ops.FIFOQueue(capacity=100000, dtypes=[tf.string, tf.int64], shapes=[(3,), (3,)],
+                                              shared_name=None, name=None)
         enqueue_op = input_queue.enqueue_many([image_paths_placeholder, labels_placeholder])
         
         nrof_preprocess_threads = 4
@@ -85,6 +84,7 @@ def main(args):
             filenames, label = input_queue.dequeue()
             images = []
             for filename in tf.unpack(filenames):
+                # 处理每个图片
                 file_contents = tf.read_file(filename)
                 image = tf.image.decode_png(file_contents)
                 
@@ -95,7 +95,7 @@ def main(args):
                 if args.random_flip:
                     image = tf.image.random_flip_left_right(image)
     
-                #pylint: disable=no-member
+                # pylint: disable=no-member
                 image.set_shape((args.image_size, args.image_size, 3))
                 images.append(tf.image.per_image_whitening(image))
                 # images.append(tf.image.per_image_standardization(image))
@@ -145,8 +145,8 @@ def main(args):
             # update_gradient_vars = tf.global_variables()
 
         # Build a Graph that trains the model with one batch of examples and updates the model parameters
-        train_op = facenet.train(total_loss, global_step, args.optimizer, 
-            learning_rate, args.moving_average_decay, update_gradient_vars)
+        train_op = facenet.train(total_loss, global_step, args.optimizer,
+                                 learning_rate, args.moving_average_decay, update_gradient_vars)
         
         # Create a saver
         restore_saver = tf.train.Saver(restore_vars)
@@ -182,9 +182,9 @@ def main(args):
                 epoch = step // args.epoch_size
                 # Train for one epoch
                 train(args, sess, train_set, epoch, image_paths_placeholder, labels_placeholder, labels_batch,
-                    batch_size_placeholder, learning_rate_placeholder, phase_train_placeholder, enqueue_op, input_queue, global_step, 
-                    embeddings, total_loss, train_op, summary_op, summary_writer, args.learning_rate_schedule_file,
-                    args.embedding_size, anchor, positive, negative, triplet_loss)
+                      batch_size_placeholder, learning_rate_placeholder, phase_train_placeholder, enqueue_op,
+                      input_queue, global_step, embeddings, total_loss, train_op, summary_op, summary_writer,
+                      args.learning_rate_schedule_file, args.embedding_size, anchor, positive, negative, triplet_loss)
 
                 # Save variables and the metagraph if it doesn't exist already
                 save_variables_and_metagraph(sess, saver, summary_writer, model_dir, subdir, step)
@@ -204,7 +204,7 @@ def train(args, sess, dataset, epoch, image_paths_placeholder, labels_placeholde
           embedding_size, anchor, positive, negative, triplet_loss):
     batch_number = 0
     
-    if args.learning_rate>0.0:
+    if args.learning_rate > 0.0:
         lr = args.learning_rate
     else:
         lr = facenet.get_learning_rate_from_file(learning_rate_schedule_file, epoch)
@@ -216,44 +216,50 @@ def train(args, sess, dataset, epoch, image_paths_placeholder, labels_placeholde
         start_time = time.time()
         nrof_examples = args.people_per_batch * args.images_per_person
         labels_array = np.reshape(np.arange(nrof_examples),(-1,3))
-        image_paths_array = np.reshape(np.expand_dims(np.array(image_paths),1), (-1,3))
+        image_paths_array = np.reshape(np.expand_dims(np.array(image_paths), 1), (-1, 3))
+        # 在这里开辟了一个新的线程用于从内存中读取数据
         sess.run(enqueue_op, {image_paths_placeholder: image_paths_array, labels_placeholder: labels_array})
         emb_array = np.zeros((nrof_examples, embedding_size))
         nrof_batches = int(np.ceil(nrof_examples / args.batch_size))
         for i in xrange(nrof_batches):
             batch_size = min(nrof_examples-i*args.batch_size, args.batch_size)
-            emb, lab = sess.run([embeddings, labels_batch], feed_dict={batch_size_placeholder: batch_size, 
-                learning_rate_placeholder: 0.0, phase_train_placeholder: False})
-            emb_array[lab,:] = emb
+            # 流程图, 输入数据
+            emb, lab = sess.run([embeddings, labels_batch], feed_dict={batch_size_placeholder: batch_size,
+                                                                       learning_rate_placeholder: 0.0,
+                                                                       phase_train_placeholder: False})
+            emb_array[lab, :] = emb
         print('%.3f' % (time.time()-start_time))
 
         # Select triplets based on the embeddings
         print('Selecting suitable triplets for training')
-        triplets, nrof_random_negs, nrof_triplets = select_triplets(emb_array, num_per_class, 
-            image_paths, args.people_per_batch, args.alpha)
+        triplets, nrof_random_negs, nrof_triplets = select_triplets(emb_array, num_per_class, image_paths,
+                                                                    args.people_per_batch, args.alpha)
         selection_time = time.time() - start_time
-        print('(nrof_random_negs, nrof_triplets) = (%d, %d): time=%.3f seconds' % 
-            (nrof_random_negs, nrof_triplets, selection_time))
+        print('(nrof_random_negs, nrof_triplets) = (%d, %d): time=%.3f seconds' %(nrof_random_negs, nrof_triplets,
+                                                                                  selection_time))
 
         # Perform training on the selected triplets
         nrof_batches = int(np.ceil(nrof_triplets*3/args.batch_size))
         triplet_paths = list(itertools.chain(*triplets))
-        #triplet_paths = triplet_paths[0:nrof_batches*args.batch_size]
+        # triplet_paths = triplet_paths[0:nrof_batches*args.batch_size]
         print('Nrof paths: %d' % len(triplet_paths))
-        labels_array = np.reshape(np.arange(len(triplet_paths)),(-1,3))
-        triplet_paths_array = np.reshape(np.expand_dims(np.array(triplet_paths),1), (-1,3))
+        labels_array = np.reshape(np.arange(len(triplet_paths)), (-1, 3))
+        triplet_paths_array = np.reshape(np.expand_dims(np.array(triplet_paths), 1), (-1, 3))
         sess.run(enqueue_op, {image_paths_placeholder: triplet_paths_array, labels_placeholder: labels_array})
         nrof_examples = len(triplet_paths)
         train_time = 0
         i = 0
         emb_array = np.zeros((nrof_examples, embedding_size))
         loss_array = np.zeros((nrof_triplets,))
+        # 根据求出的特征再计算triplet损失函数,再进行优化
         while i < nrof_batches:
             start_time = time.time()
             batch_size = min(nrof_examples-i*args.batch_size, args.batch_size)
-            feed_dict = {batch_size_placeholder: batch_size, learning_rate_placeholder: lr, phase_train_placeholder: True}
-            err, _, step, emb, lab = sess.run([loss, train_op, global_step, embeddings, labels_batch], feed_dict=feed_dict)
-            emb_array[lab,:] = emb
+            feed_dict = {batch_size_placeholder: batch_size, learning_rate_placeholder: lr,
+                         phase_train_placeholder: True}
+            err, _, step, emb, lab = sess.run([loss, train_op, global_step, embeddings, labels_batch],
+                                              feed_dict=feed_dict)
+            emb_array[lab, :] = emb
             loss_array[i] = err
             duration = time.time() - start_time
             print('Epoch: [%d][%d/%d]\tTime %.3f\tLoss %2.3f' %
@@ -271,6 +277,8 @@ def train(args, sess, dataset, epoch, image_paths_placeholder, labels_placeholde
   
 def select_triplets(embeddings, nrof_images_per_class, image_paths, people_per_batch, alpha):
     """ Select the triplets for training
+        为triplet_loss选择训练数据
+        根据index选择一个正样本, 在满足阈值的负样本中随机选一个作为负样本, 构成三元组
     """
     trip_idx = 0
     emb_start_idx = 0
@@ -286,22 +294,25 @@ def select_triplets(embeddings, nrof_images_per_class, image_paths, people_per_b
 
     for i in xrange(people_per_batch):
         nrof_images = int(nrof_images_per_class[i])
-        for j in xrange(1,nrof_images):
+        # 该人的所有图片
+        for j in xrange(1, nrof_images):
             a_idx = emb_start_idx + j - 1
             neg_dists_sqr = np.sum(np.square(embeddings[a_idx] - embeddings), 1)
-            for pair in xrange(j, nrof_images): # For every possible positive pair.
+            for pair in xrange(j, nrof_images):  # For every possible positive pair.
                 p_idx = emb_start_idx + pair
                 pos_dist_sqr = np.sum(np.square(embeddings[a_idx]-embeddings[p_idx]))
                 neg_dists_sqr[emb_start_idx:emb_start_idx+nrof_images] = np.NaN
-                #all_neg = np.where(np.logical_and(neg_dists_sqr-pos_dist_sqr<alpha, pos_dist_sqr<neg_dists_sqr))[0]  # FaceNet selection
-                all_neg = np.where(neg_dists_sqr-pos_dist_sqr<alpha)[0] # VGG Face selecction
+                #  FaceNet selection
+                # all_neg = np.where(np.logical_and(neg_dists_sqr-pos_dist_sqr<alpha, pos_dist_sqr<neg_dists_sqr))[0]
+                all_neg = np.where(neg_dists_sqr-pos_dist_sqr < alpha)[0]  # VGG Face selecction
                 nrof_random_negs = all_neg.shape[0]
-                if nrof_random_negs>0:
+                if nrof_random_negs > 0:
                     rnd_idx = np.random.randint(nrof_random_negs)
                     n_idx = all_neg[rnd_idx]
                     triplets.append((image_paths[a_idx], image_paths[p_idx], image_paths[n_idx]))
-                    #print('Triplet %d: (%d, %d, %d), pos_dist=%2.6f, neg_dist=%2.6f (%d, %d, %d, %d, %d)' % 
-                    #    (trip_idx, a_idx, p_idx, n_idx, pos_dist_sqr, neg_dists_sqr[n_idx], nrof_random_negs, rnd_idx, i, j, emb_start_idx))
+                    # print('Triplet %d: (%d, %d, %d), pos_dist=%2.6f, neg_dist=%2.6f (%d, %d, %d, %d, %d)' %
+                    #       (trip_idx, a_idx, p_idx, n_idx, pos_dist_sqr, neg_dists_sqr[n_idx], nrof_random_negs,
+                    #        rnd_idx, i, j, emb_start_idx))
                     trip_idx += 1
 
                 num_trips += 1
@@ -311,11 +322,13 @@ def select_triplets(embeddings, nrof_images_per_class, image_paths, people_per_b
     np.random.shuffle(triplets)
     return triplets, num_trips, len(triplets)
 
+
 def sample_people(dataset, people_per_batch, images_per_person):
     nrof_images = people_per_batch * images_per_person
-  
+
     # Sample classes from the dataset
     nrof_classes = len(dataset)
+    # 每个人的id
     class_indices = np.arange(nrof_classes)
     np.random.shuffle(class_indices)
     
@@ -324,32 +337,36 @@ def sample_people(dataset, people_per_batch, images_per_person):
     num_per_class = []
     sampled_class_indices = []
     # Sample images from these classes until we have enough
-    while len(image_paths)<nrof_images:
+    while len(image_paths) < nrof_images:
         class_index = class_indices[i]
+        # 这个人的图片数
         nrof_images_in_class = len(dataset[class_index])
         image_indices = np.arange(nrof_images_in_class)
         np.random.shuffle(image_indices)
+        # min(这个人的图片数, 每个人最多取的图片数, 总共还需要取的图片数)
         nrof_images_from_class = min(nrof_images_in_class, images_per_person, nrof_images-len(image_paths))
         idx = image_indices[0:nrof_images_from_class]
+        # 取shuffle后的index, 根据index取图片和label
         image_paths_for_class = [dataset[class_index].image_paths[j] for j in idx]
         sampled_class_indices += [class_index]*nrof_images_from_class
         image_paths += image_paths_for_class
         num_per_class.append(nrof_images_from_class)
-        i+=1
+        i += 1
   
     return image_paths, num_per_class
 
-def evaluate(sess, image_paths, embeddings, labels_batch, image_paths_placeholder, labels_placeholder, 
-        batch_size_placeholder, learning_rate_placeholder, phase_train_placeholder, enqueue_op, actual_issame, batch_size, 
-        seed, nrof_folds, log_dir, step, summary_writer, embedding_size):
+
+def evaluate(sess, image_paths, embeddings, labels_batch, image_paths_placeholder, labels_placeholder,
+             batch_size_placeholder, learning_rate_placeholder, phase_train_placeholder, enqueue_op, actual_issame,
+             batch_size, seed, nrof_folds, log_dir, step, summary_writer, embedding_size):
     start_time = time.time()
     # Run forward pass to calculate embeddings
     print('Running forward pass on LFW images: ', end='')
     
     nrof_images = len(actual_issame)*2
-    assert(len(image_paths)==nrof_images)
-    labels_array = np.reshape(np.arange(nrof_images),(-1,3))
-    image_paths_array = np.reshape(np.expand_dims(np.array(image_paths),1), (-1,3))
+    assert(len(image_paths) == nrof_images)
+    labels_array = np.reshape(np.arange(nrof_images), (-1, 3))
+    image_paths_array = np.reshape(np.expand_dims(np.array(image_paths), 1), (-1, 3))
     sess.run(enqueue_op, {image_paths_placeholder: image_paths_array, labels_placeholder: labels_array})
     emb_array = np.zeros((nrof_images, embedding_size))
     nrof_batches = int(np.ceil(nrof_images / batch_size))
@@ -378,6 +395,7 @@ def evaluate(sess, image_paths, embeddings, labels_batch, image_paths_placeholde
     summary_writer.add_summary(summary, step)
     with open(os.path.join(log_dir,'lfw_result.txt'),'at') as f:
         f.write('%d\t%.5f\t%.5f\n' % (step, np.mean(accuracy), val))
+
 
 def save_variables_and_metagraph(sess, saver, summary_writer, model_dir, model_name, step):
     # Save the model checkpoint

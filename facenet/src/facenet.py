@@ -23,7 +23,7 @@ from sklearn.cross_validation import KFold
 from scipy import interpolate
 from tensorflow.python.training import training
 import pdb
-#import h5py
+import h5py
 
 
 def triplet_loss(anchor, positive, negative, alpha):
@@ -66,7 +66,7 @@ def center_loss(features, label, alfa, nrof_classes):
     """
     nrof_features = features.get_shape()[1]
     centers = tf.get_variable('centers', [nrof_classes, nrof_features], dtype=tf.float32,
-        initializer=tf.constant_initializer(0), trainable=False)
+                              initializer=tf.constant_initializer(0), trainable=False)
     label = tf.reshape(label, [-1])
     centers_batch = tf.gather(centers, label)
     diff = (1 - alfa) * (centers_batch - features)
@@ -95,25 +95,27 @@ def read_images_from_disk(input_queue):
     file_contents = tf.read_file(input_queue[0])
     example = tf.image.decode_png(file_contents, channels=3)
     return example, label
-  
+
+
 def random_rotate_image(image):
     angle = np.random.uniform(low=-10.0, high=10.0)
     return misc.imrotate(image, angle, 'bicubic')
-  
+
+
 def read_and_augument_data(image_list, label_list, image_size, batch_size, max_nrof_epochs, 
         random_crop, random_flip, random_rotate, nrof_preprocess_threads, shuffle=True):
-    
+    # 将image_list, label_list转换成输入队列, 根据训练轮数, 不断从本地/云端读取数据,
     images = ops.convert_to_tensor(image_list, dtype=tf.string)
     labels = ops.convert_to_tensor(label_list, dtype=tf.int32)
 
     # Makes an input queue
-    input_queue = tf.train.slice_input_producer([images, labels],
-        num_epochs=max_nrof_epochs, shuffle=shuffle)
+    input_queue = tf.train.slice_input_producer([images, labels], num_epochs=max_nrof_epochs, shuffle=shuffle)
 
     images_and_labels = []
     for _ in range(nrof_preprocess_threads):
         image, label = read_images_from_disk(input_queue)
         if random_rotate:
+            # 通过tf.py_func(func, inp, Tout, stateful=True, name=None)可以将任意的python函数func转变为TensorFlow op
             image = tf.py_func(random_rotate_image, [image], tf.uint8)
         if random_crop:
             image = tf.random_crop(image, [image_size, image_size, 3])
@@ -121,19 +123,33 @@ def read_and_augument_data(image_list, label_list, image_size, batch_size, max_n
             image = tf.image.resize_image_with_crop_or_pad(image, image_size, image_size)
         if random_flip:
             image = tf.image.random_flip_left_right(image)
-        #pylint: disable=no-member
+        # pylint: disable=no-member
         image.set_shape((image_size, image_size, 3))
         image = tf.image.per_image_whitening(image)
         # image = tf.image.per_image_standardization(image)
         images_and_labels.append([image, label])
 
-    image_batch, label_batch = tf.train.batch_join(
-        images_and_labels, batch_size=batch_size,
-        capacity=4 * nrof_preprocess_threads * batch_size,
-        allow_smaller_final_batch=True)
-  
+    # 使用tf.train.batch_join()，可以使用多个reader，并行读取数据。每个Reader使用一个线程。
+    # tf.train.batch与tf.train.shuffle_batch函数是单个Reader读取，但是可以多线程。
+    # tf.train.batch_join与tf.train.shuffle_batch_join可设置多Reader读取，每个Reader使用一个线程。
+    # 至于两种方法的效率，单Reader时，2个线程就达到了速度的极限。多Reader时，2个Reader就达到了极限。
+    # 所以并不是线程越多越快，甚至更多的线程反而会使效率下降。
+
+    # 在不同的线程中入列不同的tensor需要入列的样本在images_and_labels中
+    # 创建的线程个数为len(images_and_labels), 在这里应该是有4个入列线程，因为images_and_labels只append4次
+    # 线程i入列张量images_and_labels[i]
+    # images_and_labels[i1][j]与images_and_labels[i2][j]的类型和形状必须要一样
+    # (当enqueue many参数为true时，第一维可以不一样)
+    # batch_join的作用是创建样本批，用于批处理, capacity控制着用于增长队列的预取的个数
+    # batch_size用于出列的一个批的大小
+    # enqueue_many表示一次出列多个数据
+    # shapes：样本的shape，默认根据images_and_labels[i]推断出来
+    image_batch, label_batch = tf.train.batch_join(images_and_labels, batch_size=batch_size,
+                                                   capacity=4 * nrof_preprocess_threads * batch_size,
+                                                   allow_smaller_final_batch=True)
     return image_batch, label_batch
-  
+
+
 def _add_loss_summaries(total_loss):
     """Add summaries for losses.
   
